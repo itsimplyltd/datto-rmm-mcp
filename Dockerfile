@@ -1,5 +1,6 @@
 # Multi-stage build for efficient container size
-FROM node:26-alpine AS builder
+# node:26-alpine multi-arch index pinned by digest, resolved from Docker Hub 2026-10-02 (Node 26.10.0). Re-resolve deliberately when bumping (security review S5).
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS builder
 
 # Build arguments
 ARG VERSION="unknown"
@@ -41,7 +42,7 @@ RUN echo "@wyre-ai:registry=https://npm.pkg.github.com" > .npmrc && \
     rm -f .npmrc
 
 # Production stage
-FROM node:26-alpine AS production
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS production
 
 # Create a non-root user for security
 RUN addgroup -g 1001 -S datto && \
