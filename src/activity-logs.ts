@@ -80,7 +80,7 @@ export interface ListActivityLogsInput {
 
 const DEFAULT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const MAX_SIZE = 250;
-const DEFAULT_SIZE = 100;
+const DEFAULT_SIZE = 50;
 
 /**
  * Normalises any `Date`-parseable input to the exact UTC format the API
@@ -99,13 +99,42 @@ function clampSize(size: number | undefined): number {
   return Math.min(MAX_SIZE, Math.max(1, Math.trunc(n)));
 }
 
-function parseDetails(raw: string | undefined): unknown {
+/**
+ * Keys inside `details` that repeat a top-level column (id, entity, category,
+ * action, site, hostname, user). Datto sends the whole event again as a JSON
+ * string, which roughly doubled each row: 51 rows came to 72KB. user.email
+ * is kept because the top-level user object has no email.
+ */
+const DUPLICATED_DETAIL_KEYS = new Set([
+  "uid",
+  "entity",
+  "event.action",
+  "event.category",
+  "device.hostname",
+  "device.uid",
+  "site.name",
+  "user.id",
+  "user.username",
+  "user.firstname",
+  "user.lastname",
+]);
+
+export function parseDetails(raw: string | undefined): unknown {
   if (raw === undefined) return undefined;
+  let parsed: unknown;
   try {
-    return JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch {
     return raw;
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (DUPLICATED_DETAIL_KEYS.has(key)) continue;
+    if (value === null || value === "") continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 export async function listActivityLogs(

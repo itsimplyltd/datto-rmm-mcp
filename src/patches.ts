@@ -56,10 +56,79 @@ export interface PatchesResponse {
   patches: Patch[];
 }
 
-export function getDevicePatches(creds: DattoCredentials, deviceUid: string): Promise<PatchesResponse> {
-  return dattoGet<PatchesResponse>(creds, `/v2/device/${encodeURIComponent(deviceUid)}/patches`);
+export type InstallStatus = "INSTALLED" | "APPROVED_PENDING" | "NOT_APPROVED";
+
+export interface PatchListOptions {
+  installStatus?: InstallStatus;
+  includeDescriptions?: boolean;
+  max?: number;
 }
 
-export function getSitePatches(creds: DattoCredentials, siteUid: string): Promise<PatchesResponse> {
-  return dattoGet<PatchesResponse>(creds, `/v2/site/${encodeURIComponent(siteUid)}/patches`);
+/**
+ * What the patch tools return. `totalCount` is Datto's own count, so a caller
+ * can always tell a complete answer from a capped one. The API pages these
+ * endpoints at 250 rows, and returning the first page as if it were the whole
+ * list (as this server did until 1.9.0-itsl3) reads as a complete answer.
+ */
+export interface PatchList {
+  totalCount: number;
+  returned: number;
+  truncated: boolean;
+  patches: Array<Record<string, unknown>>;
+}
+
+/** Datto refuses page sizes above 250 ("exceeds the defined limit of 250"). */
+const PATCH_PAGE_SIZE = 250;
+const DEFAULT_PATCH_MAX = 2000;
+
+async function listPatches(
+  creds: DattoCredentials,
+  path: string,
+  opts: PatchListOptions
+): Promise<PatchList> {
+  const max = Math.max(1, Math.min(opts.max ?? DEFAULT_PATCH_MAX, 10000));
+  const patches: PatchList["patches"] = [];
+  let totalCount = 0;
+  // Datto pages these by number (page=0,1,...), not by cursor. Stop on a null
+  // nextPageUrl, an empty page, or the cap. Never fetch nextPageUrl itself.
+  for (let page = 0; page < 1000 && patches.length < max; page++) {
+    const res = await dattoGet<PatchesResponse>(creds, path, {
+      page,
+      max: PATCH_PAGE_SIZE,
+      installStatus: opts.installStatus,
+    });
+    totalCount = res.pageDetails?.totalCount ?? totalCount;
+    const rows = res.patches ?? [];
+    for (const row of rows) {
+      if (patches.length >= max) break;
+      if (opts.includeDescriptions) {
+        patches.push({ ...row });
+      } else {
+        const { description: _omit, ...rest } = row;
+        patches.push(rest);
+      }
+    }
+    if (!res.pageDetails?.nextPageUrl || rows.length === 0) break;
+  }
+  if (totalCount < patches.length) totalCount = patches.length;
+  return { totalCount, returned: patches.length, truncated: patches.length < totalCount, patches };
+}
+
+export function getDevicePatches(
+  creds: DattoCredentials,
+  deviceUid: string,
+  opts: PatchListOptions = {}
+): Promise<PatchList> {
+  return listPatches(creds, `/v2/device/${encodeURIComponent(deviceUid)}/patches`, {
+    includeDescriptions: true,
+    ...opts,
+  });
+}
+
+export function getSitePatches(
+  creds: DattoCredentials,
+  siteUid: string,
+  opts: PatchListOptions = {}
+): Promise<PatchList> {
+  return listPatches(creds, `/v2/site/${encodeURIComponent(siteUid)}/patches`, opts);
 }

@@ -80,7 +80,7 @@ describe("datto_get_site_patches", () => {
     };
 
     expect(body.result?.isError).toBeFalsy();
-    expect(capturedUrl).toBe(`${DATTO_HOST}/api/v2/site/site-123/patches`);
+    expect(capturedUrl).toBe(`${DATTO_HOST}/api/v2/site/site-123/patches?page=0&max=250`);
     expect(capturedUrl).not.toContain("/v2/sites/");
   });
 
@@ -108,5 +108,84 @@ describe("datto_get_site_patches", () => {
       result?: { content?: { text?: string }[]; isError?: boolean };
     };
     expect(body.result?.isError).toBeFalsy();
+  });
+});
+
+describe("patch paging", () => {
+  function patchRow(i: number) {
+    return {
+      patchId: `p-${i}`,
+      title: `Patch ${i}`,
+      description: "Long Microsoft boilerplate",
+      severity: "IMPORTANT",
+      installStatus: "NOT_APPROVED",
+      totalDevices: 3,
+    };
+  }
+
+  // Two pages, as the live API returns for a site with 372 patches: 250 then 122.
+  function stubTwoPages(seen: string[]) {
+    stubFetch((url) => {
+      if (!url.includes("/patches")) return undefined;
+      seen.push(url);
+      const page = Number(new URL(url).searchParams.get("page") ?? "0");
+      const rows = page === 0 ? 250 : 122;
+      return jsonResponse({
+        pageDetails: {
+          count: rows,
+          totalCount: 372,
+          prevPageUrl: null,
+          nextPageUrl:
+            page === 0 ? "https://evil.example.com/api/v2/site/site-123/patches?max=250&page=1" : null,
+        },
+        patches: Array.from({ length: rows }, (_, i) => patchRow(page * 250 + i)),
+      });
+    });
+  }
+
+  async function resultJson(res: Response) {
+    const body = (await res.json()) as { result?: { content?: { text?: string }[] } };
+    const text = body.result?.content?.[0]?.text ?? "{}";
+    return JSON.parse(text.replace(/^[\s\S]*?(\{)/, "$1").replace(/\}[^}]*$/, "}"));
+  }
+
+  it("follows every page and reports totalCount, without fetching nextPageUrl's host", async () => {
+    const seen: string[] = [];
+    stubTwoPages(seen);
+    const res = await call("datto_get_site_patches", { siteUid: "site-123" });
+    const out = await resultJson(res);
+    expect(out.totalCount).toBe(372);
+    expect(out.returned).toBe(372);
+    expect(out.truncated).toBe(false);
+    expect(seen).toHaveLength(2);
+    expect(seen.every((u) => u.startsWith(DATTO_HOST))).toBe(true);
+    expect(seen[1]).toContain("page=1");
+  });
+
+  it("marks the answer truncated when max cuts it short", async () => {
+    stubTwoPages([]);
+    const res = await call("datto_get_site_patches", { siteUid: "site-123", max: 100 });
+    const out = await resultJson(res);
+    expect(out.returned).toBe(100);
+    expect(out.totalCount).toBe(372);
+    expect(out.truncated).toBe(true);
+  });
+
+  it("omits patch descriptions on the site tool unless asked", async () => {
+    stubTwoPages([]);
+    const without = await resultJson(await call("datto_get_site_patches", { siteUid: "site-123", max: 1 }));
+    expect(without.patches[0].description).toBeUndefined();
+    stubTwoPages([]);
+    const withDesc = await resultJson(
+      await call("datto_get_site_patches", { siteUid: "site-123", max: 1, includeDescriptions: true })
+    );
+    expect(withDesc.patches[0].description).toBe("Long Microsoft boilerplate");
+  });
+
+  it("passes the installStatus filter through", async () => {
+    const seen: string[] = [];
+    stubTwoPages(seen);
+    await call("datto_get_device_patches", { deviceUid: "dev-1", installStatus: "NOT_APPROVED", max: 1 });
+    expect(seen[0]).toContain("installStatus=NOT_APPROVED");
   });
 });

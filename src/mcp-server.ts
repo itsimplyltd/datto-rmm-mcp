@@ -34,7 +34,7 @@ import {
   buildAlertCard,
 } from "./alert-card.js";
 import { ALERT_CARD_HTML } from "./generated/alert-card-html.js";
-import { getDevicePatches, getSitePatches } from "./patches.js";
+import { getDevicePatches, getSitePatches, type InstallStatus } from "./patches.js";
 import { listActivityLogs } from "./activity-logs.js";
 import { listUsers } from "./users.js";
 import { findDevicesByMacAddress } from "./mac-lookup.js";
@@ -703,13 +703,22 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
         {
           name: "datto_get_device_patches",
           description:
-            "Get Windows patch installation status for a device - per-patch installed/missing/pending status, severity, reboot requirement, and KB article",
+            "Get Windows patch status for ONE device - one row per patch with its install status on that device (INSTALLED / APPROVED_PENDING / NOT_APPROVED), severity, reboot requirement and KB article. Use this to answer 'what is missing on <device>'. Follows every page; totalCount and truncated say whether the list is complete.",
           inputSchema: {
             type: "object",
             properties: {
               deviceUid: {
                 type: "string",
                 description: "The device UID",
+              },
+              installStatus: {
+                type: "string",
+                enum: ["INSTALLED", "APPROVED_PENDING", "NOT_APPROVED"],
+                description: "Optional filter on install status",
+              },
+              max: {
+                type: "number",
+                description: "Maximum rows to return across all pages (default 2000)",
               },
             },
             required: ["deviceUid"],
@@ -718,13 +727,26 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
         {
           name: "datto_get_site_patches",
           description:
-            "Get Windows patch installation status across all devices in a site",
+            "Site-wide Windows patch summary - one row PER PATCH (not per device) with its severity, install status and totalDevices, the number of devices in the site it applies to. It does not say which devices; for 'what is missing on <device>' use datto_get_device_patches. Follows every page; totalCount and truncated say whether the list is complete. Patch descriptions are omitted unless includeDescriptions is true.",
           inputSchema: {
             type: "object",
             properties: {
               siteUid: {
                 type: "string",
                 description: "The site UID",
+              },
+              installStatus: {
+                type: "string",
+                enum: ["INSTALLED", "APPROVED_PENDING", "NOT_APPROVED"],
+                description: "Optional filter on install status",
+              },
+              max: {
+                type: "number",
+                description: "Maximum rows to return across all pages (default 2000)",
+              },
+              includeDescriptions: {
+                type: "boolean",
+                description: "Include Microsoft's long patch descriptions (default false; they are boilerplate and large)",
               },
             },
             required: ["siteUid"],
@@ -784,8 +806,8 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
               },
               size: {
                 type: "number",
-                description: "Page size, clamped to 1-250. Default: 100.",
-                default: 100,
+                description: "Page size, clamped to 1-250. Default: 50.",
+                default: 50,
               },
               cursor: {
                 type: "string",
@@ -1294,8 +1316,12 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
         // these two call Datto RMM's v2 patch endpoints directly rather than
         // through `client`.
         case "datto_get_device_patches": {
-          const { deviceUid } = args as { deviceUid: string };
-          const result = await getDevicePatches(creds, deviceUid);
+          const { deviceUid, installStatus, max } = args as {
+            deviceUid: string;
+            installStatus?: InstallStatus;
+            max?: number;
+          };
+          const result = await getDevicePatches(creds, deviceUid, { installStatus, max });
           return {
             content: [
               { type: "text", text: JSON.stringify(result ?? {}, null, 2) },
@@ -1304,8 +1330,13 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
         }
 
         case "datto_get_site_patches": {
-          const { siteUid } = args as { siteUid: string };
-          const result = await getSitePatches(creds, siteUid);
+          const { siteUid, installStatus, max, includeDescriptions } = args as {
+            siteUid: string;
+            installStatus?: InstallStatus;
+            max?: number;
+            includeDescriptions?: boolean;
+          };
+          const result = await getSitePatches(creds, siteUid, { installStatus, max, includeDescriptions });
           return {
             content: [
               { type: "text", text: JSON.stringify(result ?? {}, null, 2) },

@@ -187,9 +187,9 @@ describe("datto_list_activity_logs", () => {
 
     expect(activities).toHaveLength(1);
     expect(activities[0].date).toBe(new Date(1791106395 * 1000).toISOString());
+    // device.hostname repeats the top-level hostname column, so it is dropped.
     expect(activities[0].details).toEqual({
       "remote_session.type": "rdp",
-      "device.hostname": "HOST-1",
     });
   });
 
