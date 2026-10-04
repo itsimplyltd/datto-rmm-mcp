@@ -16,6 +16,7 @@ import {
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
+  type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   DattoRmmClient,
@@ -35,6 +36,27 @@ import {
 } from "./alert-card.js";
 import { ALERT_CARD_HTML } from "./generated/alert-card-html.js";
 import { getDevicePatches, getSitePatches, type InstallStatus } from "./patches.js";
+import { listDevices, type ListDevicesInput } from "./list-devices.js";
+
+/**
+ * Returns an error message naming any argument the tool does not declare in
+ * its inputSchema, or null when every argument is known (or the tool itself
+ * is unknown; the switch below reports that).
+ */
+export function findUnknownArguments(
+  tools: Array<{ name: string; inputSchema: { properties?: Record<string, unknown> } }>,
+  name: string,
+  args: Record<string, unknown> | undefined
+): string | null {
+  const tool = tools.find((t) => t.name === name);
+  if (!tool || !args) return null;
+  const allowed = Object.keys(tool.inputSchema.properties ?? {});
+  const unknown = Object.keys(args).filter((k) => !allowed.includes(k));
+  if (unknown.length === 0) return null;
+  return `Error: ${name} does not accept ${unknown.map((k) => `"${k}"`).join(", ")}. ` +
+    `Accepted arguments: ${allowed.length ? allowed.join(", ") : "(none)"}. ` +
+    `Nothing was queried, because an ignored filter would return unfiltered results that look filtered.`;
+}
 import { listActivityLogs } from "./activity-logs.js";
 import { listUsers } from "./users.js";
 import { findDevicesByMacAddress } from "./mac-lookup.js";
@@ -396,27 +418,46 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
     }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: [
+  const toolDefinitions: Tool[] = [
         {
           name: "datto_list_devices",
           description:
-            "List all devices in Datto RMM. Can filter by site. To look up a single device by hostname, use datto_find_device instead.",
+            "List devices in Datto RMM, optionally filtered. Returns { totalCount, returned, truncated, devices }: totalCount is how many devices match every filter, so returned < totalCount means the list was capped by max. Text filters are case-insensitive partial matches. To resolve one hostname to a UID, datto_find_device is lighter.",
           inputSchema: {
             type: "object",
             properties: {
               siteUid: {
                 type: "string",
-                description:
-                  "Filter devices by site UID (optional - if omitted, returns all devices)",
+                description: "Only devices in this site (optional)",
+              },
+              hostname: {
+                type: "string",
+                description: "Partial hostname match",
+              },
+              deviceType: {
+                type: "string",
+                description: "Partial match on device type category, e.g. Server, Desktop, Laptop, 'ESXi Host', 'Network Device'",
+              },
+              operatingSystem: {
+                type: "string",
+                description: "Partial operating system match, e.g. '2019' or 'Windows 11'",
+              },
+              siteName: {
+                type: "string",
+                description: "Partial site name match",
+              },
+              deviceClass: {
+                type: "string",
+                enum: ["device", "esxihost"],
+                description: "Exact device class. 'esxihost' for VMware ESXi hosts, 'device' for everything else",
               },
               max: {
                 type: "number",
-                description: "Maximum number of results (default: 50)",
+                description: "Maximum devices to return (default 50, up to 5000)",
                 default: 50,
               },
             },
+            additionalProperties: false,
           },
         },
         {
@@ -875,8 +916,10 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
             required: ["deviceUid"],
           },
         },
-      ],
-    };
+      ];
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    return { tools: toolDefinitions };
   });
 
   // MCP Apps (SEP-1865): the ui:// alert card is static HTML embedded at
@@ -915,6 +958,18 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+
+    // Reject arguments a tool does not declare. MCP clients pass plausible
+    // extra filters (e.g. deviceType on datto_list_devices before it had
+    // one); silently dropping them returned unfiltered data that looked like
+    // a filtered answer. An explicit error lets the caller correct itself.
+    const unknownArgs = findUnknownArguments(toolDefinitions, name, args);
+    if (unknownArgs) {
+      return {
+        content: [{ type: "text", text: unknownArgs }],
+        isError: true,
+      };
+    }
     const creds = credentialOverrides ?? getCredentials();
 
     if (!creds) {
@@ -938,12 +993,14 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
       try {
       switch (name) {
         case "datto_list_devices": {
-          const params = args as { siteUid?: string; max?: number };
-          const max = params.max || 50;
+          const params = args as ListDevicesInput;
           let siteUid = params.siteUid;
+          const hasFilter = Boolean(
+            params.hostname || params.deviceType || params.operatingSystem || params.siteName || params.deviceClass
+          );
 
-          // If no site filter, ask the user if they want to narrow by site
-          if (!siteUid) {
+          // If no filter at all, ask the user if they want to narrow by site
+          if (!siteUid && !hasFilter) {
             const siteFilter = await elicitSelection(
               "Listing all devices across all sites can return a large result set. Would you like to filter by a specific site?",
               "site",
@@ -965,24 +1022,13 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
             }
           }
 
-          let devices;
-          if (siteUid) {
-            devices = await collectItems(client.sites.devicesAll(siteUid), max);
-          } else {
-            devices = await collectItems(client.account.devicesAll(), max);
-          }
+          const listed = await listDevices(creds, { ...params, siteUid }, (d) => compactUdf(d));
 
           return {
             content: [
               {
                 type: "text",
-                text: JSON.stringify(
-                  (devices ?? []).map((d) =>
-                    compactUdf(d as unknown as Record<string, unknown>)
-                  ),
-                  null,
-                  2
-                ),
+                text: JSON.stringify(listed, null, 2),
               },
             ],
           };

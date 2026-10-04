@@ -152,7 +152,7 @@ describe("datto_list_devices / datto_get_device integration", () => {
     const inner = text
       .replace(/^<datto-data>\n/, "")
       .replace(/\n<\/datto-data>[\s\S]*$/, "");
-    const devices = JSON.parse(inner);
+    const { devices } = JSON.parse(inner);
 
     expect(Object.keys(devices[0].udf)).toEqual(["udf42"]);
   });
