@@ -1,6 +1,6 @@
 {
   "name": "@wyre-ai/datto-rmm-mcp",
-  "version": "1.9.0-itsl1",
+  "version": "1.9.0-itsl2",
   "description": "Datto RMM MCP server for Claude",
   "type": "module",
   "main": "dist/index.js",

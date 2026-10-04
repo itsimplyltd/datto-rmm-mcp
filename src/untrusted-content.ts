@@ -72,6 +72,12 @@ const REASONS: Record<string, string> = {
     "Hostnames are set on the device itself, so a compromised or malicious endpoint can name itself anything, including text designed to look like an instruction.",
   datto_get_device_audit:
     "Installed-software names come from whatever is actually installed, including malware that names itself deceptively — this reflects what the endpoint reports about itself, not a vetted source.",
+  datto_find_device_by_mac:
+    "Hostnames are set on the device itself, so a compromised or malicious endpoint can name itself anything, including text designed to look like an instruction.",
+  datto_list_activity_logs:
+    "Activity log `details` and `hostname` embed strings chosen by whatever ran on the endpoint or was typed into a remote session (process names, file paths, command lines) — a compromised device can shape this text freely to look like something other than a log entry.",
+  datto_get_esxi_host_audit:
+    "Guest VM names, datastore names, and other fields in this audit are set on the ESXi host itself, so a compromised host can shape them freely, including text designed to look like an instruction.",
 };
 
 const DEFAULT_REASON =
@@ -105,6 +111,15 @@ const DEFAULT_REASON =
  *   missing/installed, but it cannot rewrite the vendor-authored title
  *   text. Considered explicitly per the spec's prompt and excluded on that
  *   basis, not overlooked.
+ * - `datto_list_users`: RMM console user accounts are created by the MSP
+ *   admin (or the user themself) through Datto RMM's own user management,
+ *   not read off a managed endpoint — nothing here is attacker-shapable by
+ *   compromising a device.
+ * - `datto_list_site_network_interfaces`: hostnames here come from the same
+ *   source as `datto_list_devices`' hostnames, so this one is arguably
+ *   borderline — deliberately left unwrapped for now, matching the brief
+ *   that didn't call for it, but worth revisiting if this tool's hostname
+ *   field is ever surfaced somewhere an injected name could cause harm.
  */
 export const UNTRUSTED_CONTENT_TOOLS: ReadonlySet<string> = new Set([
   "datto_list_devices",
@@ -115,6 +130,9 @@ export const UNTRUSTED_CONTENT_TOOLS: ReadonlySet<string> = new Set([
   "datto_get_device_audit",
   "datto_get_job_stdout",
   "datto_get_job_stderr",
+  "datto_find_device_by_mac",
+  "datto_list_activity_logs",
+  "datto_get_esxi_host_audit",
 ]);
 
 /** `DATTO_UNTRUSTED_MARKERS=off` (case-insensitive) disables wrapping. */

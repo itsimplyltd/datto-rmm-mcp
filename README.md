@@ -109,6 +109,26 @@ Datto RMM uses regional API endpoints. Select the platform that matches your acc
 | `datto_get_job_stdout` | Get a quick job's captured stdout for a specific device |
 | `datto_get_job_stderr` | Get a quick job's captured stderr for a specific device |
 | `datto_get_device_audit` | Get device audit data (full or software only) |
+| `datto_get_device_patches` | Get Windows patch installation status for a device |
+| `datto_get_site_patches` | Get Windows patch installation status across all devices in a site |
+| `datto_list_activity_logs` | RMM activity log - remote takeovers, Web Remote sessions, job deployments, console logins, patch runs. Defaults to the last 24 hours; pass `cursor` to page forward |
+| `datto_list_users` | RMM console user accounts - who can log in and remotely access devices, with last access and disabled state |
+| `datto_find_device_by_mac` | Find device(s) by MAC address (accepts colon/dash/dot-separated or bare hex) |
+| `datto_list_site_network_interfaces` | IP and MAC addresses for every device in a site |
+| `datto_get_esxi_host_audit` | Get audit data for a VMware ESXi host (only works for actual ESXi hosts) |
+
+### Fork notes (IT Simply)
+
+- **4 Oct 2026 (`1.9.0-itsl2`):** Added the five read tools above, plus a fix
+  to `datto_get_site_patches`, which was calling the plural
+  `/v2/sites/{siteUid}/patches` (404s live) instead of the real, singular
+  `/v2/site/{siteUid}/patches`.
+- **Device records strip null UDFs.** `datto_list_devices` and
+  `datto_get_device` compact each device's `udf` object (user-defined
+  fields `udf1`-`udf300`) down to only the keys that are actually set,
+  dropping `null`/empty-string entries. Live accounts return all 300 keys
+  per device, almost entirely null - roughly 2,500 tokens of pure noise per
+  device if left unfiltered.
 
 ## Docker
 

@@ -35,6 +35,11 @@ import {
 } from "./alert-card.js";
 import { ALERT_CARD_HTML } from "./generated/alert-card-html.js";
 import { getDevicePatches, getSitePatches } from "./patches.js";
+import { listActivityLogs } from "./activity-logs.js";
+import { listUsers } from "./users.js";
+import { findDevicesByMacAddress } from "./mac-lookup.js";
+import { listSiteNetworkInterfaces } from "./network-interfaces.js";
+import { getEsxiHostAudit } from "./esxi-audit.js";
 import {
   applyUntrustedContentMarkers,
   type ToolResultLike,
@@ -168,10 +173,11 @@ type RawDevice = Device & {
   online?: boolean;
   lastSeen?: number | string;
   intIpAddress?: string;
+  extIpAddress?: string;
   portalUrl?: string;
 };
 
-/** Lightweight device summary returned by datto_find_device. */
+/** Lightweight device summary returned by datto_find_device and datto_find_device_by_mac. */
 export interface DeviceMatch {
   uid: string;
   hostname: string;
@@ -179,9 +185,56 @@ export interface DeviceMatch {
   siteName?: string;
   online?: boolean;
   intIpAddress?: string;
+  extIpAddress?: string;
   operatingSystem?: string;
   lastSeen?: number | string;
   portalUrl?: string;
+}
+
+/**
+ * Strips null/empty-string UDF (user-defined field) entries from a device
+ * record before it's serialised to the caller.
+ *
+ * Live sweep (4 Oct 2026) found every device record carries a `udf` object
+ * with 300 keys (`udf1`-`udf300`), almost all null — about 2,500 tokens of
+ * pure noise per device, meaning `datto_list_devices` with its default
+ * max: 50 was returning roughly 125k tokens of nulls alone. Only non-null,
+ * non-empty-string UDF values (e.g. a real `udf19` note an RMM policy
+ * wrote) carry any information, so this keeps only those. A device with no
+ * `udf` object at all, or a non-object `udf`, passes through unchanged.
+ */
+export function compactUdf(
+  device: Record<string, unknown>
+): Record<string, unknown> {
+  const udf = device?.udf;
+  if (typeof udf !== "object" || udf === null) {
+    return device;
+  }
+
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(udf as Record<string, unknown>)) {
+    if (value === null || value === "") continue;
+    compact[key] = value;
+  }
+
+  return { ...device, udf: compact };
+}
+
+/** Shared mapping from a raw SDK `Device` to the lightweight summary both datto_find_device and datto_find_device_by_mac return. */
+function toDeviceMatch(device: Device): DeviceMatch {
+  const raw = device as RawDevice;
+  return {
+    uid: device.uid,
+    hostname: device.hostname,
+    siteUid: device.siteUid,
+    siteName: device.siteName,
+    online: raw.online ?? raw.isOnline,
+    intIpAddress: raw.intIpAddress,
+    extIpAddress: raw.extIpAddress,
+    operatingSystem: device.operatingSystem,
+    lastSeen: raw.lastSeen ?? raw.lastSeenAt,
+    portalUrl: raw.portalUrl,
+  };
 }
 
 export async function findDevicesByHostname(
@@ -206,20 +259,7 @@ export async function findDevicesByHostname(
       return exactMatch ? candidate === needle : candidate.includes(needle);
     })
     .slice(0, Math.max(1, max))
-    .map((device) => {
-      const raw = device as RawDevice;
-      return {
-        uid: device.uid,
-        hostname: device.hostname,
-        siteUid: device.siteUid,
-        siteName: device.siteName,
-        online: raw.online ?? raw.isOnline,
-        intIpAddress: raw.intIpAddress,
-        operatingSystem: device.operatingSystem,
-        lastSeen: raw.lastSeen ?? raw.lastSeenAt,
-        portalUrl: raw.portalUrl,
-      };
-    });
+    .map(toDeviceMatch);
 }
 
 // ---------------------------------------------------------------------------
@@ -690,6 +730,129 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
             required: ["siteUid"],
           },
         },
+        {
+          name: "datto_list_activity_logs",
+          description:
+            "RMM activity log: who remotely took over or screen-controlled a device and when, web remote PowerShell sessions, file transfers, jobs created/deployed, console logins, and patch runs. For anything older than 24 hours, pass `from` explicitly - by default this only looks back 24 hours. Useful entity/category/action filters for \"who was on that machine\": DEVICE/remote/jrto (remote takeover - details include remote_session.type, start/end dates, user, source IP, device.hostname), USER/web.remote/rto (Web Remote), USER/account/login (console logins). Also covers DEVICE/job/deployment, USER/job/create, DEVICE/patch/audit, DEVICE/patch/run. Pass `cursor` (from a prior call's `nextCursor`) to page forward.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              from: {
+                type: "string",
+                description:
+                  "Start of the time range (any format Date can parse). Default: 24 hours ago. Required for anything older than that.",
+              },
+              until: {
+                type: "string",
+                description: "End of the time range (any format Date can parse).",
+              },
+              entities: {
+                type: "array",
+                items: { type: "string", enum: ["device", "user"] },
+                description: "Filter by entity type.",
+              },
+              categories: {
+                type: "array",
+                items: { type: "string" },
+                description: 'Filter by category, e.g. "remote", "job", "account", "patch".',
+              },
+              actions: {
+                type: "array",
+                items: { type: "string" },
+                description: 'Filter by action, e.g. "jrto", "rto", "login", "deployment".',
+              },
+              siteIds: {
+                type: "array",
+                items: { type: "number" },
+                description: "Filter by site ID.",
+              },
+              userIds: {
+                type: "array",
+                items: { type: "number" },
+                description: "Filter by user ID.",
+              },
+              searchQuery: {
+                type: "string",
+                description:
+                  'Lucene-style query, e.g. \'data.filter_id : "filterId" AND device.hostname : "hostname"\'.',
+              },
+              order: {
+                type: "string",
+                enum: ["asc", "desc"],
+                description: "Sort order by creation date. Default: desc.",
+                default: "desc",
+              },
+              size: {
+                type: "number",
+                description: "Page size, clamped to 1-250. Default: 100.",
+                default: 100,
+              },
+              cursor: {
+                type: "string",
+                description: "Opaque pagination cursor from a prior response's nextCursor.",
+              },
+            },
+          },
+        },
+        {
+          name: "datto_list_users",
+          description:
+            "RMM console user accounts: who can log in to Datto RMM and remotely access managed devices, with last access and disabled state.",
+          inputSchema: {
+            type: "object",
+            properties: {},
+          },
+        },
+        {
+          name: "datto_find_device_by_mac",
+          description:
+            "Find device(s) by MAC address. Accepts common formats (aa:bb:cc:dd:ee:ff, aa-bb-cc-dd-ee-ff, aabb.ccdd.eeff, or bare hex) and normalises automatically. Returns a lightweight summary per match, same shape as datto_find_device.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              macAddress: {
+                type: "string",
+                description: "MAC address in any common format",
+              },
+            },
+            required: ["macAddress"],
+          },
+        },
+        {
+          name: "datto_list_site_network_interfaces",
+          description:
+            "IP and MAC addresses for every device in a site - answers 'what is at 10.x.x.x at this client'.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              siteUid: {
+                type: "string",
+                description: "The site UID",
+              },
+              max: {
+                type: "number",
+                description: "Maximum number of devices to return (default: 250)",
+                default: 250,
+              },
+            },
+            required: ["siteUid"],
+          },
+        },
+        {
+          name: "datto_get_esxi_host_audit",
+          description:
+            "Get audit data for a VMware ESXi host (system info, guests, processors, NICs, memory, datastores). Only works for devices that are VMware ESXi hosts - any other device returns an error.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              deviceUid: {
+                type: "string",
+                description: "The device UID",
+              },
+            },
+            required: ["deviceUid"],
+          },
+        },
       ],
     };
   });
@@ -789,7 +952,16 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
 
           return {
             content: [
-              { type: "text", text: JSON.stringify(devices ?? [], null, 2) },
+              {
+                type: "text",
+                text: JSON.stringify(
+                  (devices ?? []).map((d) =>
+                    compactUdf(d as unknown as Record<string, unknown>)
+                  ),
+                  null,
+                  2
+                ),
+              },
             ],
           };
         }
@@ -859,7 +1031,16 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
           const device = await client.devices.get(deviceUid);
           return {
             content: [
-              { type: "text", text: JSON.stringify(device ?? {}, null, 2) },
+              {
+                type: "text",
+                text: JSON.stringify(
+                  device
+                    ? compactUdf(device as unknown as Record<string, unknown>)
+                    : {},
+                  null,
+                  2
+                ),
+              },
             ],
           };
         }
@@ -1128,6 +1309,84 @@ export function createMcpServer(credentialOverrides?: DattoCredentials): Server 
           return {
             content: [
               { type: "text", text: JSON.stringify(result ?? {}, null, 2) },
+            ],
+          };
+        }
+
+        case "datto_list_activity_logs": {
+          const params = args as {
+            from?: string;
+            until?: string;
+            entities?: string[];
+            categories?: string[];
+            actions?: string[];
+            siteIds?: number[];
+            userIds?: number[];
+            searchQuery?: string;
+            order?: "asc" | "desc";
+            size?: number;
+            cursor?: string;
+          };
+          const result = await listActivityLogs(creds, params);
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(result, null, 2) },
+            ],
+          };
+        }
+
+        case "datto_list_users": {
+          const result = await listUsers(creds);
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(result, null, 2) },
+            ],
+          };
+        }
+
+        case "datto_find_device_by_mac": {
+          const { macAddress } = args as { macAddress: string };
+          const devices = await findDevicesByMacAddress(creds, macAddress);
+          const matches = (devices ?? []).map(toDeviceMatch);
+
+          if (matches.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No devices found with MAC address "${macAddress}".`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ count: matches.length, devices: matches }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case "datto_list_site_network_interfaces": {
+          const { siteUid, max } = args as { siteUid: string; max?: number };
+          const result = await listSiteNetworkInterfaces(creds, siteUid, max);
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(result, null, 2) },
+            ],
+          };
+        }
+
+        case "datto_get_esxi_host_audit": {
+          const { deviceUid } = args as { deviceUid: string };
+          const audit = await getEsxiHostAudit(creds, deviceUid);
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(audit ?? {}, null, 2) },
             ],
           };
         }

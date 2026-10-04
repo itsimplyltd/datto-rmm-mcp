@@ -24,7 +24,7 @@ function textResult(text: string): ToolResultLike {
 }
 
 describe("UNTRUSTED_CONTENT_TOOLS", () => {
-  it("includes job stdout/stderr, alerts, devices, and device audit", () => {
+  it("includes job stdout/stderr, alerts, devices, device audit, MAC lookup, activity logs, and ESXi audit", () => {
     for (const name of [
       "datto_get_job_stdout",
       "datto_get_job_stderr",
@@ -34,6 +34,9 @@ describe("UNTRUSTED_CONTENT_TOOLS", () => {
       "datto_get_device",
       "datto_find_device",
       "datto_get_device_audit",
+      "datto_find_device_by_mac",
+      "datto_list_activity_logs",
+      "datto_get_esxi_host_audit",
     ]) {
       expect(UNTRUSTED_CONTENT_TOOLS.has(name)).toBe(true);
     }
@@ -50,6 +53,8 @@ describe("UNTRUSTED_CONTENT_TOOLS", () => {
       "datto_resolve_alert",
       "datto_get_device_patches",
       "datto_get_site_patches",
+      "datto_list_users",
+      "datto_list_site_network_interfaces",
     ]) {
       expect(UNTRUSTED_CONTENT_TOOLS.has(name)).toBe(false);
     }
