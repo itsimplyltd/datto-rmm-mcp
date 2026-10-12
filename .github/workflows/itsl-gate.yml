@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+# @wyre-* dependencies live on GitHub Packages, which needs a token even to read.
+env:
+  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   gate:
     runs-on: ubuntu-latest
