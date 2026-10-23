@@ -32,7 +32,12 @@ async function call(name: string, args: Record<string, unknown>) {
   );
 }
 
-async function resultJson(res: Response): Promise<any> {
+type ToolJson = {
+  users: Record<string, unknown>[];
+  [key: string]: unknown;
+};
+
+async function resultJson(res: Response): Promise<ToolJson> {
   const body = (await res.json()) as {
     result?: { content?: { text?: string }[]; isError?: boolean };
   };
