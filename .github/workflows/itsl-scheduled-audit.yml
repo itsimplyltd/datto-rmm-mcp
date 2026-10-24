@@ -1,0 +1,48 @@
+# IT Simply scheduled dependency audit. Runs daily at 17:00 UTC (05:00/06:00 NZ) so a failure
+# reaches the 06:47 NZ digest. A failed scheduled run emails the repo admins by GitHub's default
+# notification behaviour; no other notification is wired up on purpose.
+#
+# Actions pinned by full commit SHA:
+#   actions/checkout    v7.0.1  3d3c42e5aac5ba805825da76410c181273ba90b1
+#   actions/setup-node  v7.0.0  820762786026740c76f36085b0efc47a31fe5020
+
+name: ITSL scheduled audit
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  scheduled-audit:
+    name: scheduled-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26'
+      # @wyre-* packages need a token even to read metadata. Same arrangement as itsl-gate.yml:
+      # WYRE_PACKAGES_TOKEN (read:packages PAT) via NODE_AUTH_TOKEN, never written to disk.
+      - name: Configure npm for GitHub Packages
+        run: |
+          printf '%s\n' '@wyre-ai:registry=https://npm.pkg.github.com' '@wyre-technology:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$RUNNER_TEMP/wyre.npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/wyre.npmrc" >> "$GITHUB_ENV"
+      - name: npm ci
+        run: npm ci --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.WYRE_PACKAGES_TOKEN }}
+      - name: npm audit (runtime deps, moderate and above)
+        run: npm audit --omit=dev --audit-level=moderate
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.WYRE_PACKAGES_TOKEN }}
+      - name: npm audit signatures
+        run: npm audit signatures
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.WYRE_PACKAGES_TOKEN }}
