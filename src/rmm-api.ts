@@ -52,6 +52,7 @@ async function getAccessToken(creds: DattoCredentials): Promise<string> {
 
   const basicAuth = Buffer.from("public-client:public").toString("base64");
   const response = await fetch(`${apiUrl}/auth/oauth/token`, {
+    redirect: "error",
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -128,6 +129,7 @@ export async function dattoGet<T>(
   const token = await getAccessToken(creds);
 
   const response = await fetch(url, {
+    redirect: "error",
     headers: { Authorization: `Bearer ${token}` },
   });
 
@@ -139,6 +141,7 @@ export async function dattoGet<T>(
     tokenCache.delete(tokenCacheKey(creds));
     const retryToken = await getAccessToken(creds);
     const retryResponse = await fetch(url, {
+      redirect: "error",
       headers: { Authorization: `Bearer ${retryToken}` },
     });
     if (!retryResponse.ok) {
