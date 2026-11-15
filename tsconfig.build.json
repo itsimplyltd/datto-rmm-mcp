@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "comment": "Container build: the Cloudflare Worker entry (src/worker.ts) and every test are not part of the shipped image. tsconfig.json still covers them for typecheck.",
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src/worker.ts", "src/**/__tests__/**"]
+}

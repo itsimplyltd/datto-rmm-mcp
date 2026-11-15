@@ -125,6 +125,7 @@ jobs:
           docker run -d --name smoke -p 8080:8080 \
             -e MCP_TRANSPORT=http \
             -e AUTH_MODE=gateway \
+            -e CONDUIT_S2S_SECRET="$(openssl rand -hex 32)" \
             itsl-docker-build:pr
           ok=0
           for i in $(seq 1 30); do
